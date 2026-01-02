@@ -2,24 +2,14 @@ import SwiftUI
 
 struct HomeView: View {
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing:10) {
             Spacer()
 
             Text("HYROX")
                 .font(.system(size: 34, weight: .black, design: .default))
                 .foregroundColor(.primary)
 
-            // Placeholder hero area (replace with actual artwork later)
-            Rectangle()
-                .fill(Color.black)
-                .frame(height: 220)
-                .cornerRadius(12)
-                .overlay(
-                    Text("Coach preview")
-                        .foregroundColor(.white)
-                        .font(.headline)
-                )
-
+        
             Spacer()
 
             VStack(spacing: 14) {
