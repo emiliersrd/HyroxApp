@@ -30,106 +30,106 @@ struct CompareVideosView: View {
     @State private var comparisonPlayer: AVPlayer?
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("Compare Videos")
-                    .font(.title2)
-                    .bold()
-                Spacer()
-            }
-            .padding(.horizontal)
-            .padding(.top, 6)
-
-            HStack(spacing: 12) {
-                VStack(alignment: .leading) {
-                    Button("Select Left Video") { showLeftPicker = true }
-                        .buttonStyle(.borderedProminent)
-                    Text(leftURL?.lastPathComponent ?? "No video selected")
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(spacing: 12) {
+                HStack {
+                    Text("Compare Videos")
+                        .font(.title2)
+                        .bold()
+                    Spacer()
                 }
-                VStack(alignment: .leading) {
-                    Button("Select Right Video") { showRightPicker = true }
-                        .buttonStyle(.borderedProminent)
-                    Text(rightURL?.lastPathComponent ?? "No video selected")
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                .padding(.horizontal)
+                .padding(.top, 6)
+
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading) {
+                        Button("Select Left Video") { showLeftPicker = true }
+                            .buttonStyle(.borderedProminent)
+                        Text(leftURL?.lastPathComponent ?? "No video selected")
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    VStack(alignment: .leading) {
+                        Button("Select Right Video") { showRightPicker = true }
+                            .buttonStyle(.borderedProminent)
+                        Text(rightURL?.lastPathComponent ?? "No video selected")
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    Spacer()
                 }
-            }
-            .padding(.horizontal)
+                .padding(.horizontal)
 
-            if isAnalyzing {
-                ProgressView("Analyzing...")
-                    .padding(.top, 6)
-            }
-
-            HStack(spacing: 12) {
-                Button("Analyze & Play Both") {
-                    guard let l = leftURL, let r = rightURL else { return }
-                    analyzeBothAndPlay(left: l, right: r)
+                if isAnalyzing {
+                    ProgressView("Analyzing...")
+                        .padding(.top, 6)
                 }
-                .disabled(leftURL == nil || rightURL == nil || isAnalyzing)
-                .buttonStyle(.borderedProminent)
 
-                Button("Play Both (no analysis)") {
-                    guard let l = leftURL, let r = rightURL else { return }
-                    playBoth(left: l, right: r)
-                }
-                .disabled(leftURL == nil || rightURL == nil)
-                .buttonStyle(.bordered)
-            }
-            .padding(.horizontal)
-
-            HStack {
-                Button("Generate Skeleton Overlay Video") { exportSkeletonOverlay() }
+                HStack(spacing: 12) {
+                    Button("Analyze & Play Both") {
+                        guard let l = leftURL, let r = rightURL else { return }
+                        analyzeBothAndPlay(left: l, right: r)
+                    }
                     .disabled(leftURL == nil || rightURL == nil || isAnalyzing)
+                    .buttonStyle(.borderedProminent)
+
+                    Button("Play Both (no analysis)") {
+                        guard let l = leftURL, let r = rightURL else { return }
+                        playBoth(left: l, right: r)
+                    }
+                    .disabled(leftURL == nil || rightURL == nil)
                     .buttonStyle(.bordered)
-                Spacer()
-            }
-            .padding(.horizontal)
-
-            HStack(spacing: 8) {
-                playerView(player: leftPlayer)
-                playerView(player: rightPlayer)
-            }
-            .frame(maxHeight: 360)
-
-            let leftPoints = convertToTimedPoints(leftObservations)
-            let rightPoints = convertToTimedPoints(rightObservations)
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Combined Skeleton")
-                    .font(.headline)
-                    .padding(.horizontal)
-                CombinedSkeletonOverlayView(left: leftPoints, right: rightPoints, currentTime: currentTime)
-                    .frame(height: 160)
-                    .padding(.horizontal)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Comparison Preview")
-                    .font(.headline)
-                    .padding(.horizontal)
-                if let player = comparisonPlayer {
-                    VideoPlayer(player: player)
-                        .id(comparisonURL?.absoluteString ?? UUID().uuidString)
-                        .frame(height: 180)
-                        .cornerRadius(8)
-                        .padding(.horizontal)
-                        .onAppear { player.play() }
-                } else {
-                    Text("Generated skeleton overlay will appear here after export.")
-                        .foregroundColor(.secondary)
-                        .padding(.horizontal)
-                        .multilineTextAlignment(.leading)
                 }
-            }
+                .padding(.horizontal)
 
-            Spacer()
+                
+
+                // Players row — allow expansion with window; still inside scrollable content
+                HStack(spacing: 8) {
+                    playerView(player: leftPlayer)
+                    playerView(player: rightPlayer)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal)
+
+                let leftPoints = convertToTimedPoints(leftObservations)
+                let rightPoints = convertToTimedPoints(rightObservations)
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Combined Skeleton")
+                        .font(.headline)
+                        .padding(.horizontal)
+                    CombinedSkeletonOverlayView(left: leftPoints, right: rightPoints, currentTime: currentTime)
+                        .frame(height: 160)
+                        .padding(.horizontal)
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Comparison Preview")
+                        .font(.headline)
+                        .padding(.horizontal)
+                    if let player = comparisonPlayer {
+                        VideoPlayer(player: player)
+                            .id(comparisonURL?.absoluteString ?? UUID().uuidString)
+                            .frame(height: 180)
+                            .cornerRadius(8)
+                            .padding(.horizontal)
+                            .onAppear { player.play() }
+                    } else {
+                        Text("Generated skeleton overlay will appear here after export.")
+                            .foregroundColor(.secondary)
+                            .padding(.horizontal)
+                            .multilineTextAlignment(.leading)
+                    }
+                }
+
+                Spacer().frame(height: 24)
+            }
+            .frame(maxWidth: .infinity)
         }
-        .padding(.vertical)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         #if os(macOS)
         .safeAreaInset(edge: .top) { Color.clear.frame(height: 36) }
         #endif
@@ -147,14 +147,15 @@ struct CompareVideosView: View {
             if let p = player {
                 VideoPlayer(player: p)
                     .onDisappear { stopPlayback() }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .cornerRadius(8)
             } else {
                 Rectangle()
                     .fill(Color.black.opacity(0.85))
                     .overlay(Text("Ready to play").foregroundColor(.white))
             }
         }
-        .frame(maxWidth: .infinity)
-        .cornerRadius(8)
+        .frame(maxWidth: .infinity, minHeight: 200)
         .clipped()
     }
 
@@ -531,4 +532,3 @@ struct VideoPicker: View {
     }
 }
 #endif
-

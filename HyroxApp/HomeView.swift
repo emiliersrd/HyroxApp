@@ -6,9 +6,9 @@ struct HomeView: View {
 
     private var titleText: String { "HYROX" }
     private var howToTrainText: String { appLanguage == "en" ? "How to train" : "Comment s'entraîner" }
-    private var selectVideoText: String { appLanguage == "en" ? "Select video for analyzing" : "Sélectionner une vidéo" }
+    private var selectVideoText: String { appLanguage == "en" ? "Analyze your movement" : "Analyse ton mouvement" }
     private var compareText: String { appLanguage == "en" ? "Compare" : "Comparer" }
-    private var skeletonTrackingText: String { appLanguage == "en" ? "Skeleton tracking" : "Suivi du squelette" }
+    private var skeletonTrackingText: String { appLanguage == "en" ? "Live skeleton tracking" : "Skeleton tracking en direct" }
     private var languageLabelText: String { appLanguage == "en" ? "Language" : "Langage" }
 
     var body: some View {
