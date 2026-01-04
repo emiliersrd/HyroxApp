@@ -2,115 +2,131 @@
 import SwiftUI
 import AVKit
 import Vision
+import AVFoundation
+import CoreMedia
 
 struct SkeletonTrackingView: View {
     @StateObject private var recorder = VideoRecorder()
     private let analyzer = SkeletonAnalyzer()
 
     @State private var previewLayer: AVCaptureVideoPreviewLayer?
-    @State private var observations: [VNHumanBodyPoseObservation] = []
+    @State private var observations: [VNHumanBodyPoseObservation] = []          // live preview observations
+    // keep project TimedObservation type so analyzer assignment compiles
+    @State private var timedObservations: [TimedObservation] = []              // analyzed observations with timestamps
+
     @State private var player: AVPlayer?
     @State private var showPlayer = false
+    @State private var currentTime: CMTime = .zero
+    @State private var timeObserverToken: Any?
 
     var body: some View {
-        VStack(spacing: 16) {
-            Text("Skeleton tracking")
-                .font(.largeTitle)
-                .bold()
+        ScrollView(.vertical, showsIndicators: true) {
+            VStack(spacing: 16) {
+                Text("Skeleton tracking")
+                    .font(.largeTitle)
+                    .bold()
 
-            if let layer = previewLayer {
-                ZStack {
-                    CameraPreviewView(previewLayer: layer)
+                if let layer = previewLayer {
+                    ZStack {
+                        CameraPreviewView(previewLayer: layer)
+                            .frame(height: 300)
+                            .cornerRadius(12)
+
+                        // disable hit testing on the overlay so touches pass through
+                        overlayPointsLive()
+                            .frame(height: 300)
+                            .allowsHitTesting(false)
+                    }
+                    .padding(.horizontal)
+                } else {
+                    Rectangle()
+                        .fill(Color.black.opacity(0.8))
                         .frame(height: 300)
                         .cornerRadius(12)
-
-                    overlayPoints()
-                        .frame(height: 300)
+                        .overlay(
+                            Text("Camera preview + overlay")
+                                .foregroundColor(.white)
+                        )
+                        .padding(.horizontal)
                 }
-            } else {
-                Rectangle()
-                    .fill(Color.black.opacity(0.8))
-                    .frame(height: 300)
-                    .cornerRadius(12)
-                    .overlay(
-                        Text("Camera preview + overlay")
-                            .foregroundColor(.white)
-                    )
+
+                // adaptive layout so buttons wrap instead of truncating
+                let columns = [GridItem(.adaptive(minimum: 140), spacing: 12)]
+                LazyVGrid(columns: columns, spacing: 12) {
+                    Button(action: startSession) {
+                        Text("Start camera")
+                            .font(.headline)
+                            .padding(.vertical, 10)
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+
+                    if recorder.isRecording {
+                        Button(action: { recorder.stopRecording() }) {
+                            Text("Stop recording")
+                                .font(.headline)
+                                .foregroundColor(.red)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    } else {
+                        Button(action: { recorder.startRecording() }) {
+                            Text("Start recording")
+                                .font(.headline)
+                                .foregroundColor(.green)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
+                    // Analyze: runs analysis, stores timedObservations and immediately plays the last video with overlay
+                    if let url = recorder.recordedURL {
+                        Button(action: { analyzeAndPlay(url: url) }) {
+                            Text("Analyze last recording")
+                                .font(.headline)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+
+                        // Play: just plays the last recording (no forced analysis)
+                        Button(action: { play(url: url, showOverlay: false) }) {
+                            Text("Play last recording")
+                                .font(.headline)
+                                .padding(.vertical, 10)
+                                .frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+                .padding(.horizontal)
+
+                if showPlayer, let player = player {
+                    ZStack {
+                        VideoPlayer(player: player)
+                            .frame(height: 200)
+                            .onDisappear { stopPlayback() }
+
+                        // convert project's TimedObservation -> named-tuple expected by overlay
+                        if !timedObservations.isEmpty {
+                            SkeletonOverlayView(
+                                observations: timedObservations.map { (time: $0.time, observation: $0.observation) },
+                                currentTime: currentTime
+                            )
+                            .allowsHitTesting(false)
+                            .frame(height: 200)
+                        }
+                    }
+                    .padding(.horizontal)
+                }
+
+                Spacer(minLength: 20)
             }
-
-            HStack(spacing: 12) {
-                Button(action: startSession) {
-                    Text("Start camera")
-                        .font(.headline)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                        .layoutPriority(1)
-                        .padding(.vertical, 10)
-                        .frame(minWidth: 0, maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-
-                if recorder.isRecording {
-                    Button(action: recorder.stopRecording) {
-                        Text("Stop recording")
-                            .font(.headline)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .foregroundColor(.red)
-                            .layoutPriority(1)
-                            .padding(.vertical, 10)
-                            .frame(minWidth: 0, maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    Button(action: recorder.startRecording) {
-                        Text("Start recording")
-                            .font(.headline)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .foregroundColor(.green)
-                            .layoutPriority(1)
-                            .padding(.vertical, 10)
-                            .frame(minWidth: 0, maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                }
-
-                if let url = recorder.recordedURL {
-                    Button(action: { analyze(url: url) }) {
-                        Text("Analyze last recording")
-                            .font(.headline)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .layoutPriority(1)
-                            .padding(.vertical, 10)
-                            .frame(minWidth: 0, maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-
-                    Button(action: { play(url: url) }) {
-                        Text("Play last recording")
-                            .font(.headline)
-                            .lineLimit(1)
-                            .minimumScaleFactor(0.6)
-                            .layoutPriority(1)
-                            .padding(.vertical, 10)
-                            .frame(minWidth: 0, maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-            .frame(maxWidth: .infinity)
-
-            if showPlayer, let player = player {
-                VideoPlayer(player: player)
-                    .frame(height: 200)
-                    .onDisappear { player.pause() }
-            }
-
-            Spacer()
+            .padding(.vertical)
+            .frame(maxWidth: .infinity, alignment: .top)
         }
-        .padding()
         .navigationTitle("Skeleton tracking")
         .onAppear {
             recorder.startSession()
@@ -118,23 +134,23 @@ struct SkeletonTrackingView: View {
         }
         .onDisappear {
             recorder.stopSession()
+            stopPlayback()
         }
     }
 
     @ViewBuilder
-    private func overlayPoints() -> some View {
+    private func overlayPointsLive() -> some View {
         GeometryReader { geo in
             ZStack {
                 ForEach(observations.indices, id: \.self) { idx in
-                    if let point = try? observations[idx].recognizedPoint(.neck) {
-                        if point.confidence > 0.1 {
-                            let x = CGFloat(point.x) * geo.size.width
-                            let y = (1 - CGFloat(point.y)) * geo.size.height
-                            Circle()
-                                .fill(Color.green.opacity(0.8))
-                                .frame(width: 12, height: 12)
-                                .position(x: x, y: y)
-                        }
+                    if let point = try? observations[idx].recognizedPoint(.neck),
+                       point.confidence > 0.1 {
+                        let x = CGFloat(point.x) * geo.size.width
+                        let y = (1 - CGFloat(point.y)) * geo.size.height
+                        Circle()
+                            .fill(Color.green.opacity(0.8))
+                            .frame(width: 12, height: 12)
+                            .position(x: x, y: y)
                     }
                 }
             }
@@ -146,22 +162,45 @@ struct SkeletonTrackingView: View {
         self.previewLayer = recorder.makePreviewLayer()
     }
 
-    private func analyze(url: URL) {
-        // Analyze in background
-        observations = []
+    // analyze and then play with overlay
+    private func analyzeAndPlay(url: URL) {
+        timedObservations = []
         DispatchQueue.global(qos: .userInitiated).async {
-            analyzer.analyzeAsset(url: url) { obs in
+            analyzer.analyzeAsset(url: url) { timedObs in
                 DispatchQueue.main.async {
-                    self.observations = obs
+                    // assign analyzer result directly to the project's TimedObservation array
+                    self.timedObservations = timedObs
+                    // after analysis, play with overlay enabled
+                    self.play(url: url, showOverlay: true)
                 }
             }
         }
     }
 
-    private func play(url: URL) {
+    // play; if showOverlay is true the overlay will be shown when timedObservations exist
+    private func play(url: URL, showOverlay: Bool) {
+        stopPlayback() // ensure clean state
         player = AVPlayer(url: url)
+        player?.seek(to: .zero)
         player?.play()
         showPlayer = true
+
+        let interval = CMTime(seconds: 1.0/30.0, preferredTimescale: 600)
+        timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+            self.currentTime = time
+        }
+    }
+
+    private func stopPlayback() {
+        if let token = timeObserverToken, let p = player {
+            p.removeTimeObserver(token)
+            timeObserverToken = nil
+        }
+        player?.pause()
+        player = nil
+        showPlayer = false
+        currentTime = .zero
+        // keep timedObservations (they can be reused) — clear if you prefer
     }
 }
 

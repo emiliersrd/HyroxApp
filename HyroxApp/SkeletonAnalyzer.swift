@@ -1,71 +1,77 @@
+// swift
+// File: `HyroxApp/SkeletonAnalyzer.swift`
 import Foundation
-import Vision
 import AVFoundation
+import Vision
+import CoreMedia
 
-/// Skeleton analyzer that uses Vision's human body pose request on video frames.
-final class SkeletonAnalyzer {
-    private let sequenceHandler = VNSequenceRequestHandler()
+public final class SkeletonAnalyzer {
+    private var imageGenerator: AVAssetImageGenerator?
 
-    /// Analyze a CMSampleBuffer - returns landmarks if detected
-    func analyze(sampleBuffer: CMSampleBuffer) -> VNHumanBodyPoseObservation? {
-        guard let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return nil }
+    public init() {}
 
-        let request = VNDetectHumanBodyPoseRequest()
-        do {
-            try sequenceHandler.perform([request], on: pixelBuffer)
-            if let observations = request.results as? [VNHumanBodyPoseObservation], let first = observations.first {
-                return first
-            }
-        } catch {
-            print("Vision error: \(error)")
-        }
-        return nil
-    }
-
-    /// Analyze using an AVAsset (video file) - iterates frames and calls the completion with observations array
-    func analyzeAsset(url: URL, completion: @escaping ([VNHumanBodyPoseObservation]) -> Void) {
-        var results: [VNHumanBodyPoseObservation] = []
+    // Matches the call used in RenameLabelView: analyzer.analyzeAsset(url:) { obs in ... }
+    public func analyzeAsset(url: URL,
+                             frameInterval: Double = 0.2,
+                             completion: @escaping ([TimedObservation]) -> Void) {
         let asset = AVAsset(url: url)
-        let reader: AVAssetReader
-        do {
-            reader = try AVAssetReader(asset: asset)
-        } catch {
-            print("Failed to create reader: \(error)")
-            completion([])
+        let duration = asset.duration
+        guard duration.seconds > 0 else {
+            DispatchQueue.main.async { completion([]) }
             return
         }
 
-        guard let videoTrack = asset.tracks(withMediaType: .video).first else {
-            completion([])
+        let generator = AVAssetImageGenerator(asset: asset)
+        self.imageGenerator = generator // retain until finished
+        generator.appliesPreferredTrackTransform = true
+        generator.requestedTimeToleranceBefore = .zero
+        generator.requestedTimeToleranceAfter = .zero
+
+        var times: [NSValue] = []
+        var t: Double = 0
+        while t < duration.seconds {
+            let cm = CMTimeMakeWithSeconds(t, preferredTimescale: 600)
+            times.append(NSValue(time: cm))
+            t += frameInterval
+        }
+        if times.isEmpty {
+            self.imageGenerator = nil
+            DispatchQueue.main.async { completion([]) }
             return
         }
 
-        let outputSettings: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA)
-        ]
+        var observations: [TimedObservation] = []
+        let observationsLock = DispatchQueue(label: "SkeletonAnalyzer.observationsLock")
+        let group = DispatchGroup()
 
-        let trackOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: outputSettings)
-        reader.add(trackOutput)
-        reader.startReading()
+        for _ in times { group.enter() }
 
-        while reader.status == .reading {
-            if let sample = trackOutput.copyNextSampleBuffer(), let pixelBuffer = CMSampleBufferGetImageBuffer(sample) {
-                let request = VNDetectHumanBodyPoseRequest()
-                do {
-                    try sequenceHandler.perform([request], on: pixelBuffer)
-                    if let observations = request.results as? [VNHumanBodyPoseObservation] {
-                        results.append(contentsOf: observations)
+        generator.generateCGImagesAsynchronously(forTimes: times) { [weak self] requestedTime, cgImage, actualTime, result, error in
+            defer { group.leave() }
+
+            guard result == .succeeded, let cgImage = cgImage else {
+                return
+            }
+
+            let request = VNDetectHumanBodyPoseRequest()
+            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+            do {
+                try handler.perform([request])
+                if let obs = request.results?.compactMap({ $0 as? VNHumanBodyPoseObservation }).first {
+                    observationsLock.sync {
+                        observations.append(TimedObservation(time: actualTime, observation: obs))
                     }
-                } catch {
-                    print("Vision frame error: \(error)")
                 }
+            } catch {
+                // ignore per-frame Vision errors
             }
         }
 
-        if reader.status == .completed {
-            completion(results)
-        } else {
-            completion(results)
+        group.notify(queue: .main) { [weak self] in
+            let sorted = observations.sorted { $0.time < $1.time }
+            completion(sorted)
+            // release the generator so it can deinit
+            self?.imageGenerator = nil
         }
     }
 }

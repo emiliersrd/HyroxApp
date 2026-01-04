@@ -41,7 +41,7 @@ struct ExerciseRow: View {
                     .cornerRadius(8)
                     .overlay(
                         Group {
-                            if let url = exercise.videoURL {
+                            if exercise.videoURL != nil {
                                 Image(systemName: "play.circle.fill")
                                     .resizable()
                                     .scaledToFit()

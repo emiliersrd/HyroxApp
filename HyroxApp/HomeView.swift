@@ -25,7 +25,7 @@ struct HomeView: View {
                 }
 
                 NavigationLink(destination: RenameLabelView()) {
-                    Text("Rename label")
+                    Text("Select video for analyzing")
                         .font(.headline)
                         .foregroundColor(.black)
                         .frame(maxWidth: .infinity)
