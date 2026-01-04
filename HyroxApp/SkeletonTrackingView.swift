@@ -1,3 +1,4 @@
+// swift
 import SwiftUI
 import AVKit
 import Vision
@@ -37,33 +38,69 @@ struct SkeletonTrackingView: View {
                     )
             }
 
-            HStack(spacing: 20) {
+            HStack(spacing: 12) {
                 Button(action: startSession) {
                     Text("Start camera")
+                        .font(.headline)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                        .layoutPriority(1)
+                        .padding(.vertical, 10)
+                        .frame(minWidth: 0, maxWidth: .infinity)
                 }
+                .buttonStyle(.borderedProminent)
 
                 if recorder.isRecording {
                     Button(action: recorder.stopRecording) {
                         Text("Stop recording")
+                            .font(.headline)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
                             .foregroundColor(.red)
+                            .layoutPriority(1)
+                            .padding(.vertical, 10)
+                            .frame(minWidth: 0, maxWidth: .infinity)
                     }
+                    .buttonStyle(.bordered)
                 } else {
                     Button(action: recorder.startRecording) {
                         Text("Start recording")
+                            .font(.headline)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
                             .foregroundColor(.green)
+                            .layoutPriority(1)
+                            .padding(.vertical, 10)
+                            .frame(minWidth: 0, maxWidth: .infinity)
                     }
+                    .buttonStyle(.bordered)
                 }
 
                 if let url = recorder.recordedURL {
                     Button(action: { analyze(url: url) }) {
                         Text("Analyze last recording")
+                            .font(.headline)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .layoutPriority(1)
+                            .padding(.vertical, 10)
+                            .frame(minWidth: 0, maxWidth: .infinity)
                     }
+                    .buttonStyle(.bordered)
 
                     Button(action: { play(url: url) }) {
                         Text("Play last recording")
+                            .font(.headline)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.6)
+                            .layoutPriority(1)
+                            .padding(.vertical, 10)
+                            .frame(minWidth: 0, maxWidth: .infinity)
                     }
+                    .buttonStyle(.bordered)
                 }
             }
+            .frame(maxWidth: .infinity)
 
             if showPlayer, let player = player {
                 VideoPlayer(player: player)
