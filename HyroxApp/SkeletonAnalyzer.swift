@@ -15,63 +15,82 @@ public final class SkeletonAnalyzer {
                              frameInterval: Double = 0.2,
                              completion: @escaping ([TimedObservation]) -> Void) {
         let asset = AVAsset(url: url)
-        let duration = asset.duration
-        guard duration.seconds > 0 else {
-            DispatchQueue.main.async { completion([]) }
-            return
-        }
 
-        let generator = AVAssetImageGenerator(asset: asset)
-        self.imageGenerator = generator // retain until finished
-        generator.appliesPreferredTrackTransform = true
-        generator.requestedTimeToleranceBefore = .zero
-        generator.requestedTimeToleranceAfter = .zero
-
-        var times: [NSValue] = []
-        var t: Double = 0
-        while t < duration.seconds {
-            let cm = CMTimeMakeWithSeconds(t, preferredTimescale: 600)
-            times.append(NSValue(time: cm))
-            t += frameInterval
-        }
-        if times.isEmpty {
-            self.imageGenerator = nil
-            DispatchQueue.main.async { completion([]) }
-            return
-        }
-
-        var observations: [TimedObservation] = []
-        let observationsLock = DispatchQueue(label: "SkeletonAnalyzer.observationsLock")
-        let group = DispatchGroup()
-
-        for _ in times { group.enter() }
-
-        generator.generateCGImagesAsynchronously(forTimes: times) { [weak self] requestedTime, cgImage, actualTime, result, error in
-            defer { group.leave() }
-
-            guard result == .succeeded, let cgImage = cgImage else {
+        // Helper that contains the existing image-generation + Vision work.
+        func processAsset(with duration: CMTime) {
+            guard duration.seconds > 0 else {
+                DispatchQueue.main.async { completion([]) }
                 return
             }
 
-            let request = VNDetectHumanBodyPoseRequest()
-            let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
-            do {
-                try handler.perform([request])
-                if let obs = request.results?.compactMap({ $0 as? VNHumanBodyPoseObservation }).first {
-                    observationsLock.sync {
-                        observations.append(TimedObservation(time: actualTime, observation: obs))
-                    }
+            let generator = AVAssetImageGenerator(asset: asset)
+            self.imageGenerator = generator // retain until finished
+            generator.appliesPreferredTrackTransform = true
+            generator.requestedTimeToleranceBefore = .zero
+            generator.requestedTimeToleranceAfter = .zero
+
+            var times: [NSValue] = []
+            var t: Double = 0
+            while t < duration.seconds {
+                let cm = CMTime(seconds: t, preferredTimescale: 600)
+                times.append(NSValue(time: cm))
+                t += frameInterval
+            }
+            if times.isEmpty {
+                self.imageGenerator = nil
+                DispatchQueue.main.async { completion([]) }
+                return
+            }
+
+            var observations: [TimedObservation] = []
+            let observationsLock = DispatchQueue(label: "SkeletonAnalyzer.observationsLock")
+            let group = DispatchGroup()
+
+            for _ in times { group.enter() }
+
+            generator.generateCGImagesAsynchronously(forTimes: times) { [weak self] requestedTime, cgImage, actualTime, result, error in
+                defer { group.leave() }
+
+                guard result == .succeeded, let cgImage = cgImage else {
+                    return
                 }
-            } catch {
-                // ignore per-frame Vision errors
+
+                let request = VNDetectHumanBodyPoseRequest()
+                let handler = VNImageRequestHandler(cgImage: cgImage, options: [:])
+                do {
+                    try handler.perform([request])
+                    if let obs = request.results?.compactMap({ $0 as? VNHumanBodyPoseObservation }).first {
+                        observationsLock.sync {
+                            observations.append(TimedObservation(time: actualTime, observation: obs))
+                        }
+                    }
+                } catch {
+                    // ignore per-frame Vision errors
+                }
+            }
+
+            group.notify(queue: .main) { [weak self] in
+                let sorted = observations.sorted { $0.time < $1.time }
+                completion(sorted)
+                // release the generator so it can deinit
+                self?.imageGenerator = nil
             }
         }
 
-        group.notify(queue: .main) { [weak self] in
-            let sorted = observations.sorted { $0.time < $1.time }
-            completion(sorted)
-            // release the generator so it can deinit
-            self?.imageGenerator = nil
+        // Load duration using modern API on iOS 16+, fallback otherwise
+        if #available(iOS 16.0, tvOS 16.0, macOS 13.0, *) {
+            Task {
+                do {
+                    let duration: CMTime = try await asset.load(.duration)
+                    processAsset(with: duration)
+                } catch {
+                    DispatchQueue.main.async { completion([]) }
+                }
+            }
+        } else {
+            // fallback to the deprecated synchronous accessor on older OS versions
+            let duration = asset.duration
+            processAsset(with: duration)
         }
     }
 }

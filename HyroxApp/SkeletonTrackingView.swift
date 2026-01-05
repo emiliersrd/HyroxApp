@@ -19,6 +19,9 @@ struct SkeletonTrackingView: View {
     @State private var currentTime: CMTime = .zero
     @State private var timeObserverToken: Any?
 
+    @State private var isAnalyzing: Bool = false
+    @State private var analysisError: String?
+
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
             VStack(spacing: 16) {
@@ -36,6 +39,18 @@ struct SkeletonTrackingView: View {
                         overlayPointsLive()
                             .frame(height: 300)
                             .allowsHitTesting(false)
+
+                        if isAnalyzing {
+                            VStack {
+                                ProgressView("Analyzing...")
+                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                                    .padding(8)
+                                    .background(Color.black.opacity(0.6))
+                                    .cornerRadius(8)
+                                Spacer()
+                            }
+                            .padding()
+                        }
                     }
                     .padding(.horizontal)
                 } else {
@@ -62,7 +77,7 @@ struct SkeletonTrackingView: View {
                     .buttonStyle(.borderedProminent)
 
                     if recorder.isRecording {
-                        Button(action: { recorder.stopRecording() }) {
+                        Button(action: { stopRecordingAndAnalyze() }) {
                             Text("Stop recording")
                                 .font(.headline)
                                 .foregroundColor(.red)
@@ -70,6 +85,7 @@ struct SkeletonTrackingView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
+                        .disabled(isAnalyzing)
                     } else {
                         Button(action: { recorder.startRecording() }) {
                             Text("Start recording")
@@ -79,6 +95,7 @@ struct SkeletonTrackingView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
+                        .disabled(isAnalyzing)
                     }
 
                     // Analyze: runs analysis, stores timedObservations and immediately plays the last video with overlay
@@ -90,6 +107,7 @@ struct SkeletonTrackingView: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
+                        .disabled(isAnalyzing)
 
                         // Play: just plays the last recording (no forced analysis)
                         Button(action: { play(url: url, showOverlay: false) }) {
@@ -102,6 +120,13 @@ struct SkeletonTrackingView: View {
                     }
                 }
                 .padding(.horizontal)
+
+                if let error = analysisError {
+                    Text("Analysis error: \(error)")
+                        .foregroundColor(.red)
+                        .font(.caption)
+                        .padding(.horizontal)
+                }
 
                 if showPlayer, let player = player {
                     ZStack {
@@ -162,14 +187,51 @@ struct SkeletonTrackingView: View {
         self.previewLayer = recorder.makePreviewLayer()
     }
 
+    // Stop recording and automatically analyze the produced file (robust to recorder API variations).
+    private func stopRecordingAndAnalyze() {
+        analysisError = nil
+        isAnalyzing = true
+        timedObservations = []
+
+        // Call stopRecording if available (original code used recorder.stopRecording()).
+        recorder.stopRecording()
+
+        // Wait for recorder.recordedURL to become available, up to a timeout.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let timeout: TimeInterval = 8.0
+            let checkInterval: TimeInterval = 0.12
+            var waited: TimeInterval = 0
+            while waited < timeout {
+                if let url = recorder.recordedURL {
+                    DispatchQueue.main.async {
+                        analyzeAndPlay(url: url)
+                    }
+                    return
+                }
+                Thread.sleep(forTimeInterval: checkInterval)
+                waited += checkInterval
+            }
+
+            // If recordedURL didn't appear, try to fail gracefully
+            DispatchQueue.main.async {
+                self.isAnalyzing = false
+                self.analysisError = "Recorded file not available after stopping recording."
+            }
+        }
+    }
+
     // analyze and then play with overlay
     private func analyzeAndPlay(url: URL) {
+        analysisError = nil
+        isAnalyzing = true
         timedObservations = []
+
         DispatchQueue.global(qos: .userInitiated).async {
             analyzer.analyzeAsset(url: url) { timedObs in
                 DispatchQueue.main.async {
-                    // assign analyzer result directly to the project's TimedObservation array
                     self.timedObservations = timedObs
+                    self.isAnalyzing = false
+                    self.analysisError = nil
                     // after analysis, play with overlay enabled
                     self.play(url: url, showOverlay: true)
                 }
@@ -185,7 +247,8 @@ struct SkeletonTrackingView: View {
         player?.play()
         showPlayer = true
 
-        let interval = CMTime(seconds: 1.0/30.0, preferredTimescale: 600)
+        // use a tighter update interval for smoother overlay sync
+        let interval = CMTime(seconds: 1.0/60.0, preferredTimescale: 600)
         timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
             self.currentTime = time
         }
