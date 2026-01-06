@@ -62,7 +62,7 @@ struct HomeView: View {
                         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.black, lineWidth: 2))
                 }
 
-                NavigationLink(destination: CompareVideosView()) {
+                NavigationLink(destination: CompareListView()) {
                     Text(compareText)
                         .font(.headline)
                         .foregroundColor(.black)

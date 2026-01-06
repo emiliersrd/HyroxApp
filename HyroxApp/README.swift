@@ -63,8 +63,22 @@
 //     `TimedPoints` pour sérialiser points normalisés + timestamps.
 //   - Corrections autour de la création / verrouillage des CVPixelBuffer (ownership & defer).
 //   - MacOS `VideoPicker` pour ouvrir NSOpenPanel et retourner une URL sélectionnée.
+//   - `CompareListView.swift` : nouvelle vue listant rapidement les exercices pour la
+//     comparaison (rapide accès coach vs ta vidéo). Support ajouté pour charger
+//     un fichier `.mp4` local depuis le bundle (recherche tolerant dans le dossier
+//     `Ressources` ou le bundle root). Si aucun fichier local n'est trouvé, la vue
+//     retombe sur la map `coachVideoMap` (URLs YouTube/HTTP). Voir `CompareListView`.
+//   - Ajout de l'exercice "SkiErg" dans `HowToTrainView` et dans la liste Compare.
 // - `Info.plist` : vérifications clefs `NSCameraUsageDescription`, `NSMicrophoneUsageDescription`,
 //   `NSPhotoLibraryAddUsageDescription` déjà présentes.
+//
+// Note pratique — où placer des fichiers `.mp4` pour Compare :
+// - Place ton fichier .mp4 dans le groupe/ressource `Ressources` du projet Xcode
+//   (ou glisse‑dépose dans le Project navigator en cochant "Copy items if needed"
+//    et ta target). Le code recherche des variantes de nom (ex: "SkiErg.mp4",
+//    "SkiErg_coach.mp4", "skierg_coach.mp4") et affichera "local" si trouvé.
+// - Vérifie Build Phases → Copy Bundle Resources pour t'assurer que le .mp4 est bien
+//   inclus dans le bundle de l'app.
 // - Build : plusieurs corrections ont été appliquées pour lever des erreurs de compilation
 //   liées aux buffers et aux types manquants; projet compilable localement après ces fixes.
 //
@@ -123,5 +137,5 @@
 // C) Ajouter tests unitaires pour `RenameViewModel` et exécuter la suite.
 // D) Préparer l'ajout de TensorFlow Lite (SPM package + README d'installation).
 //
-// Fin du README — mise à jour effectuée le 2026-01-04
+// Fin du README — mise à jour effectuée le 2026-01-06
 // ------------------------------------------------------

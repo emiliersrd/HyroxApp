@@ -10,6 +10,9 @@ import AppKit
 #endif
 
 struct CompareVideosView: View {
+    // Optional coach video (preloaded). Default nil for existing flows.
+    let coachURL: URL?
+
     @State private var leftURL: URL?
     @State private var rightURL: URL?
     @State private var showLeftPicker = false
@@ -21,6 +24,8 @@ struct CompareVideosView: View {
     @State private var rightPlayer: AVPlayer?
     @State private var leftObservations: [TimedObservation] = []
     @State private var rightObservations: [TimedObservation] = []
+    @State private var leftVideoSize: CGSize = .zero
+    @State private var rightVideoSize: CGSize = .zero
 
     @State private var isAnalyzing = false
     @State private var currentTime: CMTime = .zero
@@ -28,6 +33,13 @@ struct CompareVideosView: View {
 
     @State private var comparisonURL: URL?
     @State private var comparisonPlayer: AVPlayer?
+
+    init(coachURL: URL? = nil) {
+        self.coachURL = coachURL
+        // initialize left/right with coachVideo on left by default
+        _leftURL = State(initialValue: coachURL)
+        _rightURL = State(initialValue: nil)
+    }
 
     var body: some View {
         ScrollView(.vertical, showsIndicators: true) {
@@ -68,16 +80,32 @@ struct CompareVideosView: View {
                 }
 
                 HStack(spacing: 12) {
-                    Button("Analyze & Play Both") {
+                    Button(action: {
                         guard let l = leftURL, let r = rightURL else { return }
                         analyzeBothAndPlay(left: l, right: r)
+                    }) {
+                        ZStack {
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 28))
+                            Image(systemName: "wand.and.stars")
+                                .font(.system(size: 10))
+                                .background(Color.clear)
+                                .offset(x: 14, y: -14)
+                        }
+                        .frame(width: 44, height: 44)
+                        .accessibilityLabel("Analyze et lire les deux vidéos")
                     }
                     .disabled(leftURL == nil || rightURL == nil || isAnalyzing)
                     .buttonStyle(.borderedProminent)
 
-                    Button("Play Both (no analysis)") {
+                    Button(action: {
                         guard let l = leftURL, let r = rightURL else { return }
                         playBoth(left: l, right: r)
+                    }) {
+                        Image(systemName: "play.fill")
+                            .font(.title2)
+                            .foregroundColor(.primary)
+                            .accessibilityLabel("Play")
                     }
                     .disabled(leftURL == nil || rightURL == nil)
                     .buttonStyle(.bordered)
@@ -88,8 +116,8 @@ struct CompareVideosView: View {
 
                 // Players row — allow expansion with window; still inside scrollable content
                 HStack(spacing: 8) {
-                    playerView(player: leftPlayer)
-                    playerView(player: rightPlayer)
+                    playerView(player: leftPlayer, observations: leftObservations, videoSize: leftVideoSize)
+                    playerView(player: rightPlayer, observations: rightObservations, videoSize: rightVideoSize)
                 }
                 .frame(maxWidth: .infinity)
                 .padding(.horizontal)
@@ -143,12 +171,30 @@ struct CompareVideosView: View {
     }
 
     private func playerView(player: AVPlayer?) -> some View {
+        // replaced by updated signature below
+        EmptyView()
+            .frame(maxWidth: .infinity, minHeight: 200)
+            .clipped()
+    }
+
+    // Updated player view with overlay
+    private func playerView(player: AVPlayer?, observations: [TimedObservation], videoSize: CGSize) -> some View {
         ZStack {
             if let p = player {
-                VideoPlayer(player: p)
-                    .onDisappear { stopPlayback() }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .cornerRadius(8)
+                ZStack {
+                    VideoPlayer(player: p)
+                        .onDisappear { stopPlayback() }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .cornerRadius(8)
+
+                    // overlay the skeleton on top of the video; convert TimedObservation -> (time, observation)
+                    SkeletonOverlayView(
+                        observations: observations.map { (time: $0.time, observation: $0.observation) },
+                        currentTime: currentTime,
+                        videoSize: videoSize
+                    )
+                    .allowsHitTesting(false)
+                }
             } else {
                 Rectangle()
                     .fill(Color.black.opacity(0.85))
@@ -165,10 +211,65 @@ struct CompareVideosView: View {
         isAnalyzing = true
         leftObservations = []
         rightObservations = []
+        leftVideoSize = .zero
+        rightVideoSize = .zero
 
         let group = DispatchGroup()
         var leftResult: [TimedObservation] = []
         var rightResult: [TimedObservation] = []
+
+        // compute video sizes using modern async APIs when available; fall back on older sync APIs
+        if #available(iOS 16.0, macOS 13.0, tvOS 16.0, *) {
+            // launch asynchronous tasks to compute sizes; analysis can proceed in parallel
+            Task.detached(priority: .userInitiated) {
+                let lAsset = AVAsset(url: left)
+                do {
+                    let tracks: [AVAssetTrack] = try await lAsset.load(.tracks)
+                    if let lTrack = tracks.first {
+                        let natural: CGSize = try await lTrack.load(.naturalSize)
+                        let t: CGAffineTransform = try await lTrack.load(.preferredTransform)
+                        let isPortrait = abs(t.b) == 1.0 || abs(t.c) == 1.0
+                        let computed = isPortrait ? CGSize(width: natural.height, height: natural.width) : natural
+                        await MainActor.run { leftVideoSize = computed }
+                    }
+                } catch {
+                    // ignore; leave leftVideoSize as .zero
+                }
+            }
+
+            Task.detached(priority: .userInitiated) {
+                let rAsset = AVAsset(url: right)
+                do {
+                    let tracks: [AVAssetTrack] = try await rAsset.load(.tracks)
+                    if let rTrack = tracks.first {
+                        let natural: CGSize = try await rTrack.load(.naturalSize)
+                        let t: CGAffineTransform = try await rTrack.load(.preferredTransform)
+                        let isPortrait = abs(t.b) == 1.0 || abs(t.c) == 1.0
+                        let computed = isPortrait ? CGSize(width: natural.height, height: natural.width) : natural
+                        await MainActor.run { rightVideoSize = computed }
+                    }
+                } catch {
+                    // ignore; leave rightVideoSize as .zero
+                }
+            }
+        } else {
+            // fallback synchronous access for older OS
+            let lAsset = AVAsset(url: left)
+            if let lTrack = lAsset.tracks(withMediaType: .video).first {
+                let natural = lTrack.naturalSize
+                let t = lTrack.preferredTransform
+                let isPortrait = abs(t.b) == 1.0 || abs(t.c) == 1.0
+                leftVideoSize = isPortrait ? CGSize(width: natural.height, height: natural.width) : natural
+            }
+
+            let rAsset = AVAsset(url: right)
+            if let rTrack = rAsset.tracks(withMediaType: .video).first {
+                let natural = rTrack.naturalSize
+                let t = rTrack.preferredTransform
+                let isPortrait = abs(t.b) == 1.0 || abs(t.c) == 1.0
+                rightVideoSize = isPortrait ? CGSize(width: natural.height, height: natural.width) : natural
+            }
+        }
 
         group.enter()
         DispatchQueue.global(qos: .userInitiated).async {

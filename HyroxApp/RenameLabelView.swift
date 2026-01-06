@@ -21,6 +21,7 @@ struct RenameLabelView: View {
     @State private var timeObserverToken: Any?
     @State private var isAnalyzing = false
     @State private var errorMessage: String?
+    @State private var videoSize: CGSize = .zero
 
     var body: some View {
         ScrollView {
@@ -52,46 +53,42 @@ struct RenameLabelView: View {
                 }
 
                 HStack(spacing: 12) {
-                    Button("Analyze & Play") {
+                    Button(action: {
                         guard let url = videoURL else { return }
                         analyzeAndPlay(url: url)
+                    }) {
+                        ZStack {
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 28))
+                            Image(systemName: "wand.and.stars")
+                                .font(.system(size: 10))
+                                .offset(x: 12, y: -12)
+                        }
+                        .frame(width: 44, height: 44)
+                        .accessibilityLabel("Analyze and play")
                     }
                     .disabled(videoURL == nil || isAnalyzing)
                     .buttonStyle(.borderedProminent)
 
-                    Button("Play (no analysis)") {
+                    Button(action: {
                         guard let url = videoURL else { return }
                         play(url: url)
+                    }) {
+                        Image(systemName: "play.fill")
+                            .font(.title2)
+                            .accessibilityLabel("Play")
                     }
                     .disabled(videoURL == nil)
                     .buttonStyle(.bordered)
                 }
                 .padding(.horizontal)
 
-                // Player + overlay
-                if showPlayer, let player = player {
-                    ZStack {
-                        VideoPlayer(player: player)
-                            .frame(height: 300)
-                            .onDisappear { stopPlayback() }
-
-                        if !timedObservations.isEmpty {
-                            SkeletonOverlayView(
-                                observations: timedObservations.map { (time: $0.time, observation: $0.observation) },
-                                currentTime: currentTime
-                            )
-                            .allowsHitTesting(false)
-                            .frame(height: 300)
-                        }
-                    }
+                // Placeholder area (we now present full screen player)
+                Rectangle()
+                    .fill(Color.black.opacity(0.85))
+                    .frame(height: 300)
+                    .overlay(Text("Ready to play"))
                     .padding(.top, 8)
-                } else {
-                    Rectangle()
-                        .fill(Color.black.opacity(0.85))
-                        .frame(height: 300)
-                        .overlay(Text("Ready to play"))
-                        .padding(.top, 8)
-                }
 
                 Spacer()
             }
@@ -103,6 +100,16 @@ struct RenameLabelView: View {
             }
         }
         .navigationTitle("Rename")
+        // Full screen player presented when showPlayer is true
+        .fullScreenCover(isPresented: $showPlayer, onDismiss: { stopPlayback() }) {
+            FullscreenPlayerView(
+                player: $player,
+                currentTime: $currentTime,
+                observations: timedObservations.map { (time: $0.time, observation: $0.observation) },
+                videoSize: videoSize,
+                onDismiss: { showPlayer = false }
+            )
+        }
     }
 
     // MARK: - Analysis / Playback
@@ -110,6 +117,37 @@ struct RenameLabelView: View {
         isAnalyzing = true
         errorMessage = nil
         timedObservations = []
+        videoSize = .zero
+
+        // compute video natural size (preferredTransform aware) when possible
+        let asset = AVAsset(url: url)
+        if #available(iOS 16.0, *) {
+            Task {
+                do {
+                    let tracks: [AVAssetTrack] = try await asset.load(.tracks)
+                    if let track = tracks.first {
+                        let natural: CGSize = try await track.load(.naturalSize)
+                        let t: CGAffineTransform = try await track.load(.preferredTransform)
+                        let isPortrait = abs(t.b) == 1.0 || abs(t.c) == 1.0
+                        let computedSize = isPortrait ? CGSize(width: natural.height, height: natural.width) : natural
+                        await MainActor.run { self.videoSize = computedSize }
+                    }
+                } catch {
+                    // ignore and leave videoSize as .zero; overlay will fallback
+                }
+            }
+        } else {
+            // fallback for older OS: use synchronous access
+            let tracks = asset.tracks(withMediaType: .video)
+            if let track = tracks.first {
+                let natural = track.naturalSize
+                let t = track.preferredTransform
+                let isPortrait = abs(t.b) == 1.0 || abs(t.c) == 1.0
+                let computedSize = isPortrait ? CGSize(width: natural.height, height: natural.width) : natural
+                videoSize = computedSize
+            }
+        }
+
         DispatchQueue.global(qos: .userInitiated).async {
             analyzer.analyzeAsset(url: url) { obs in
                 DispatchQueue.main.async {
@@ -125,13 +163,8 @@ struct RenameLabelView: View {
         stopPlayback()
         player = AVPlayer(url: url)
         player?.seek(to: .zero)
-        player?.play()
+        // do not add time observer here; fullscreen view will manage it
         showPlayer = true
-
-        let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
-        timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            self.currentTime = time
-        }
     }
 
     private func stopPlayback() {
@@ -143,6 +176,71 @@ struct RenameLabelView: View {
         player = nil
         showPlayer = false
         currentTime = .zero
+    }
+
+    // MARK: - Fullscreen Player View
+    struct FullscreenPlayerView: View {
+        @Binding var player: AVPlayer?
+        @Binding var currentTime: CMTime
+        let observations: [(time: CMTime, observation: VNHumanBodyPoseObservation)]
+        let videoSize: CGSize
+        let onDismiss: () -> Void
+
+        @Environment(\.presentationMode) var presentation
+        @State private var timeObserverToken: Any?
+
+        var body: some View {
+            ZStack(alignment: .topTrailing) {
+                GeometryReader { geo in
+                    ZStack {
+                        if let p = player {
+                            VideoPlayer(player: p)
+                                .ignoresSafeArea()
+                                .onAppear { addTimeObserver() }
+                                .onDisappear { removeTimeObserver() }
+
+                            SkeletonOverlayView(
+                                observations: observations,
+                                currentTime: currentTime,
+                                videoSize: videoSize
+                            )
+                            .allowsHitTesting(false)
+                            .ignoresSafeArea()
+                        } else {
+                            Color.black.ignoresSafeArea()
+                        }
+                    }
+                }
+
+                Button(action: {
+                    removeTimeObserver()
+                    player?.pause()
+                    onDismiss()
+                }) {
+                    Text("Fermer")
+                        .padding(10)
+                        .background(Color.black.opacity(0.6))
+                        .foregroundColor(.white)
+                        .cornerRadius(8)
+                        .padding()
+                }
+            }
+        }
+
+        private func addTimeObserver() {
+            guard timeObserverToken == nil, let p = player else { return }
+            let interval = CMTime(value: 1, timescale: 60)
+            timeObserverToken = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
+                self.currentTime = time
+            }
+        }
+
+        private func removeTimeObserver() {
+            if let token = timeObserverToken, let p = player {
+                p.removeTimeObserver(token)
+                timeObserverToken = nil
+            }
+        }
     }
 }
 

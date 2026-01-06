@@ -101,3 +101,92 @@ public func fastAnalyzeAsset(
         process(withTracks: tracks)
     }
 }
+
+/// More precise analyzer using AVAssetReader to obtain CVPixelBuffer frames and their exact
+/// presentation timestamps. This reduces timestamp drift vs playback and is better when you
+/// need tight sync between analyzed keypoints and video frames.
+public func fastAnalyzeAssetUsingReader(
+    url: URL,
+    sampleFPS: Double = 10.0,
+    targetSize: CGSize = CGSize(width: 256, height: 256),
+    maxConcurrentRequests: Int = 2,
+    completion: @escaping ([TimedObservation]) -> Void
+) {
+    let asset = AVAsset(url: url)
+    DispatchQueue.global(qos: .userInitiated).async {
+        do {
+            let reader = try AVAssetReader(asset: asset)
+
+            guard let videoTrack = asset.tracks(withMediaType: .video).first else {
+                DispatchQueue.main.async { completion([]) }
+                return
+            }
+
+            let outputSettings: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
+            ]
+            let trackOutput = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: outputSettings)
+            trackOutput.alwaysCopiesSampleData = false
+
+            guard reader.canAdd(trackOutput) else {
+                DispatchQueue.main.async { completion([]) }
+                return
+            }
+            reader.add(trackOutput)
+
+            if !reader.startReading() {
+                DispatchQueue.main.async { completion([]) }
+                return
+            }
+
+            let visionQueue = DispatchQueue(label: "fastAnalyze.reader.vision", attributes: .concurrent)
+            let semaphore = DispatchSemaphore(value: maxConcurrentRequests)
+            let visionGroup = DispatchGroup()
+            var results: [TimedObservation] = []
+            let resultsLock = DispatchQueue(label: "fastAnalyze.reader.resultsLock")
+
+            let sampleInterval = CMTimeMake(value: 1, timescale: Int32(sampleFPS))
+            var nextSampleTime = CMTime.zero
+
+            while reader.status == .reading {
+                guard let sampleBuffer = trackOutput.copyNextSampleBuffer() else { break }
+                let pts = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
+
+                // process when pts >= nextSampleTime
+                if pts >= nextSampleTime {
+                    // advance nextSampleTime
+                    repeat { nextSampleTime = CMTimeAdd(nextSampleTime, sampleInterval) } while nextSampleTime <= pts
+
+                    if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
+                        semaphore.wait()
+                        visionGroup.enter()
+                        visionQueue.async {
+                            defer { semaphore.signal(); visionGroup.leave() }
+                            let request = VNDetectHumanBodyPoseRequest()
+                            let handler = VNImageRequestHandler(cvPixelBuffer: pixelBuffer, orientation: .up, options: [:])
+                            do {
+                                try handler.perform([request])
+                                if let obs = request.results?.first as? VNHumanBodyPoseObservation {
+                                    let timed = TimedObservation(time: pts, observation: obs)
+                                    resultsLock.async { results.append(timed) }
+                                }
+                            } catch {
+                                // ignore
+                            }
+                        }
+                    }
+                }
+            }
+
+            visionGroup.notify(queue: DispatchQueue.global(qos: .userInitiated)) {
+                resultsLock.sync {
+                    let sorted = results.sorted { $0.time < $1.time }
+                    DispatchQueue.main.async { completion(sorted) }
+                }
+            }
+
+        } catch {
+            DispatchQueue.main.async { completion([]) }
+        }
+    }
+}

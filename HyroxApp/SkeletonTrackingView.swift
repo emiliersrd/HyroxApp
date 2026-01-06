@@ -1,157 +1,91 @@
-// swift
 import SwiftUI
 import AVKit
-import Vision
+@preconcurrency import Vision
 import AVFoundation
-import CoreMedia
 
 struct SkeletonTrackingView: View {
     @StateObject private var recorder = VideoRecorder()
     private let analyzer = SkeletonAnalyzer()
 
     @State private var previewLayer: AVCaptureVideoPreviewLayer?
-    @State private var observations: [VNHumanBodyPoseObservation] = []          // live preview observations
-    // keep project TimedObservation type so analyzer assignment compiles
-    @State private var timedObservations: [TimedObservation] = []              // analyzed observations with timestamps
+    // store timed observations (time + observation)
+    @State private var timedObservations: [(CMTime, VNHumanBodyPoseObservation)] = []
+    @State private var videoSize: CGSize = .zero
 
     @State private var player: AVPlayer?
     @State private var showPlayer = false
     @State private var currentTime: CMTime = .zero
     @State private var timeObserverToken: Any?
-
-    @State private var isAnalyzing: Bool = false
-    @State private var analysisError: String?
+    @State private var showFullScreenLive = false
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: true) {
-            VStack(spacing: 16) {
-                Text("Skeleton tracking")
-                    .font(.largeTitle)
-                    .bold()
+        VStack(spacing: 16) {
+            Text("Skeleton tracking")
+                .font(.largeTitle)
+                .bold()
 
-                if let layer = previewLayer {
-                    ZStack {
-                        CameraPreviewView(previewLayer: layer)
-                            .frame(height: 300)
-                            .cornerRadius(12)
-
-                        // disable hit testing on the overlay so touches pass through
-                        overlayPointsLive()
-                            .frame(height: 300)
-                            .allowsHitTesting(false)
-
-                        if isAnalyzing {
-                            VStack {
-                                ProgressView("Analyzing...")
-                                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
-                                    .padding(8)
-                                    .background(Color.black.opacity(0.6))
-                                    .cornerRadius(8)
-                                Spacer()
-                            }
-                            .padding()
-                        }
-                    }
-                    .padding(.horizontal)
-                } else {
-                    Rectangle()
-                        .fill(Color.black.opacity(0.8))
+            if let layer = previewLayer {
+                ZStack {
+                    CameraPreviewView(previewLayer: layer)
                         .frame(height: 300)
                         .cornerRadius(12)
-                        .overlay(
-                            Text("Camera preview + overlay")
-                                .foregroundColor(.white)
-                        )
-                        .padding(.horizontal)
+
+                    // overlay uses timedObservations + currentTime and knows videoSize
+                    SkeletonOverlayView(
+                        observations: timedObservations.map { ($0.0, $0.1) },
+                        currentTime: currentTime,
+                        videoSize: videoSize
+                    )
+                    .frame(height: 300)
                 }
-
-                // adaptive layout so buttons wrap instead of truncating
-                let columns = [GridItem(.adaptive(minimum: 140), spacing: 12)]
-                LazyVGrid(columns: columns, spacing: 12) {
-                    Button(action: startSession) {
-                        Text("Start camera")
-                            .font(.headline)
-                            .padding(.vertical, 10)
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    if recorder.isRecording {
-                        Button(action: { stopRecordingAndAnalyze() }) {
-                            Text("Stop recording")
-                                .font(.headline)
-                                .foregroundColor(.red)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isAnalyzing)
-                    } else {
-                        Button(action: { recorder.startRecording() }) {
-                            Text("Start recording")
-                                .font(.headline)
-                                .foregroundColor(.green)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isAnalyzing)
-                    }
-
-                    // Analyze: runs analysis, stores timedObservations and immediately plays the last video with overlay
-                    if let url = recorder.recordedURL {
-                        Button(action: { analyzeAndPlay(url: url) }) {
-                            Text("Analyze last recording")
-                                .font(.headline)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(isAnalyzing)
-
-                        // Play: just plays the last recording (no forced analysis)
-                        Button(action: { play(url: url, showOverlay: false) }) {
-                            Text("Play last recording")
-                                .font(.headline)
-                                .padding(.vertical, 10)
-                                .frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                }
-                .padding(.horizontal)
-
-                if let error = analysisError {
-                    Text("Analysis error: \(error)")
-                        .foregroundColor(.red)
-                        .font(.caption)
-                        .padding(.horizontal)
-                }
-
-                if showPlayer, let player = player {
-                    ZStack {
-                        VideoPlayer(player: player)
-                            .frame(height: 200)
-                            .onDisappear { stopPlayback() }
-
-                        // convert project's TimedObservation -> named-tuple expected by overlay
-                        if !timedObservations.isEmpty {
-                            SkeletonOverlayView(
-                                observations: timedObservations.map { (time: $0.time, observation: $0.observation) },
-                                currentTime: currentTime
-                            )
-                            .allowsHitTesting(false)
-                            .frame(height: 200)
-                        }
-                    }
-                    .padding(.horizontal)
-                }
-
-                Spacer(minLength: 20)
+            } else {
+                Rectangle()
+                    .fill(Color.black.opacity(0.8))
+                    .frame(height: 300)
+                    .cornerRadius(12)
+                    .overlay(
+                        Text("Camera preview + overlay")
+                            .foregroundColor(.white)
+                    )
             }
-            .padding(.vertical)
-            .frame(maxWidth: .infinity, alignment: .top)
+
+            HStack(spacing: 20) {
+                Button(action: startSession) {
+                    Text("Start camera")
+                }
+
+                if recorder.isRecording {
+                    Button(action: recorder.stopRecording) {
+                        Text("Stop recording")
+                            .foregroundColor(.red)
+                    }
+                } else {
+                    Button(action: recorder.startRecording) {
+                        Text("Start recording")
+                            .foregroundColor(.green)
+                    }
+                }
+
+                if let url = recorder.recordedURL {
+                    Button(action: { analyze(url: url) }) {
+                        Text("Analyze last recording")
+                    }
+
+                    Button(action: { play(url: url) }) {
+                        Text("Play last recording")
+                    }
+                }
+            }
+
+            if showPlayer, let player = player {
+                VideoPlayer(player: player)
+                    .frame(height: 200)
+                    .onDisappear { player.pause(); removeTimeObserver() }
+            }
+
+            Spacer()
         }
+        .padding()
         .navigationTitle("Skeleton tracking")
         .onAppear {
             recorder.startSession()
@@ -159,26 +93,20 @@ struct SkeletonTrackingView: View {
         }
         .onDisappear {
             recorder.stopSession()
-            stopPlayback()
+            removeTimeObserver()
+        }
+        // Present fullscreen live preview when requested
+        .fullScreenCover(isPresented: $showFullScreenLive) {
+            FullscreenLiveView(previewLayer: previewLayer, observations: timedObservations.map { (time: $0.0, observation: $0.1) }, videoSize: videoSize) {
+                showFullScreenLive = false
+            }
         }
     }
 
-    @ViewBuilder
-    private func overlayPointsLive() -> some View {
-        GeometryReader { geo in
-            ZStack {
-                ForEach(observations.indices, id: \.self) { idx in
-                    if let point = try? observations[idx].recognizedPoint(.neck),
-                       point.confidence > 0.1 {
-                        let x = CGFloat(point.x) * geo.size.width
-                        let y = (1 - CGFloat(point.y)) * geo.size.height
-                        Circle()
-                            .fill(Color.green.opacity(0.8))
-                            .frame(width: 12, height: 12)
-                            .position(x: x, y: y)
-                    }
-                }
-            }
+    private func removeTimeObserver() {
+        if let token = timeObserverToken, let player = player {
+            player.removeTimeObserver(token)
+            timeObserverToken = nil
         }
     }
 
@@ -187,88 +115,115 @@ struct SkeletonTrackingView: View {
         self.previewLayer = recorder.makePreviewLayer()
     }
 
-    // Stop recording and automatically analyze the produced file (robust to recorder API variations).
-    private func stopRecordingAndAnalyze() {
-        analysisError = nil
-        isAnalyzing = true
+    private func analyze(url: URL) {
+        // Clear previous data
         timedObservations = []
+        videoSize = .zero
+        currentTime = .zero
 
-        // Call stopRecording if available (original code used recorder.stopRecording()).
-        recorder.stopRecording()
+        // compute video size (respecting preferredTransform)
+        let asset = AVAsset(url: url)
 
-        // Wait for recorder.recordedURL to become available, up to a timeout.
-        DispatchQueue.global(qos: .userInitiated).async {
-            let timeout: TimeInterval = 8.0
-            let checkInterval: TimeInterval = 0.12
-            var waited: TimeInterval = 0
-            while waited < timeout {
-                if let url = recorder.recordedURL {
+        // Use async loading APIs to avoid deprecated synchronous access
+        Task.detached(priority: .userInitiated) {
+            do {
+                // load tracks asynchronously
+                let tracks: [AVAssetTrack] = try await asset.load(.tracks)
+                if let track = tracks.first {
+                    // load size and transform asynchronously
+                    let natural: CGSize = try await track.load(.naturalSize)
+                    let t: CGAffineTransform = try await track.load(.preferredTransform)
+                    let isPortrait = abs(t.b) == 1.0 || abs(t.c) == 1.0
+                    let computedSize = isPortrait ? CGSize(width: natural.height, height: natural.width) : natural
+
                     DispatchQueue.main.async {
-                        analyzeAndPlay(url: url)
+                        self.videoSize = computedSize
                     }
-                    return
                 }
-                Thread.sleep(forTimeInterval: checkInterval)
-                waited += checkInterval
-            }
 
-            // If recordedURL didn't appear, try to fail gracefully
-            DispatchQueue.main.async {
-                self.isAnalyzing = false
-                self.analysisError = "Recorded file not available after stopping recording."
-            }
-        }
-    }
-
-    // analyze and then play with overlay
-    private func analyzeAndPlay(url: URL) {
-        analysisError = nil
-        isAnalyzing = true
-        timedObservations = []
-
-        DispatchQueue.global(qos: .userInitiated).async {
-            analyzer.analyzeAsset(url: url) { timedObs in
-                DispatchQueue.main.async {
-                    self.timedObservations = timedObs
-                    self.isAnalyzing = false
-                    self.analysisError = nil
-                    // after analysis, play with overlay enabled
-                    self.play(url: url, showOverlay: true)
+                // Analyze using the faster asset analyzer (samples at sampleFPS)
+                // call the existing analyzer helper; it's main-actor isolated so call it on MainActor
+                await MainActor.run {
+                    fastAnalyzeAssetUsingReader(url: url, sampleFPS: 15.0, targetSize: CGSize(width: 360, height: 360), maxConcurrentRequests: 2) { timed in
+                        // timed is [TimedObservation] (TimeObservation.observation is main-actor-isolated)
+                        Task { @MainActor in
+                            let mapped: [(CMTime, VNHumanBodyPoseObservation)] = timed.map { ($0.time, $0.observation) }
+                            self.timedObservations = mapped
+                            // ensure currentTime stays 0 until user plays
+                            self.currentTime = .zero
+                        }
+                    }
+                }
+            } catch {
+                print("Failed to load asset properties: \(error)")
+                // fallback: try to run analysis without size; run analyzer anyway
+                await MainActor.run {
+                    fastAnalyzeAssetUsingReader(url: url, sampleFPS: 15.0, targetSize: CGSize(width: 360, height: 360), maxConcurrentRequests: 2) { timed in
+                        Task { @MainActor in
+                            let mapped: [(CMTime, VNHumanBodyPoseObservation)] = timed.map { ($0.time, $0.observation) }
+                            self.timedObservations = mapped
+                            self.currentTime = .zero
+                        }
+                    }
                 }
             }
         }
     }
 
-    // play; if showOverlay is true the overlay will be shown when timedObservations exist
-    private func play(url: URL, showOverlay: Bool) {
-        stopPlayback() // ensure clean state
+    private func play(url: URL) {
+        // remove existing observer
+        removeTimeObserver()
+
         player = AVPlayer(url: url)
-        player?.seek(to: .zero)
-        player?.play()
         showPlayer = true
+        player?.play()
 
-        // use a tighter update interval for smoother overlay sync
-        let interval = CMTime(seconds: 1.0/60.0, preferredTimescale: 600)
+        // add periodic time observer to sync overlay
+        let interval = CMTimeMake(value: 1, timescale: 30) // ~30fps update
         timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
             self.currentTime = time
         }
-    }
-
-    private func stopPlayback() {
-        if let token = timeObserverToken, let p = player {
-            p.removeTimeObserver(token)
-            timeObserverToken = nil
-        }
-        player?.pause()
-        player = nil
-        showPlayer = false
-        currentTime = .zero
-        // keep timedObservations (they can be reused) — clear if you prefer
     }
 }
 
 struct SkeletonTrackingView_Previews: PreviewProvider {
     static var previews: some View {
         SkeletonTrackingView()
+    }
+}
+
+// Minimal fullscreen live preview used by SkeletonTrackingView
+struct FullscreenLiveView: View {
+    let previewLayer: AVCaptureVideoPreviewLayer?
+    let observations: [(time: CMTime, observation: VNHumanBodyPoseObservation)]
+    let videoSize: CGSize
+    let onDismiss: () -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            GeometryReader { geo in
+                ZStack {
+                    if let layer = previewLayer {
+                        CameraPreviewView(previewLayer: layer)
+                            .ignoresSafeArea()
+
+                        SkeletonOverlayView(observations: observations, currentTime: .zero, videoSize: videoSize)
+                            .allowsHitTesting(false)
+                            .ignoresSafeArea()
+                    } else {
+                        Color.black.ignoresSafeArea()
+                    }
+                }
+            }
+
+            Button(action: { onDismiss() }) {
+                Text("Fermer")
+                    .padding(10)
+                    .background(Color.black.opacity(0.6))
+                    .foregroundColor(.white)
+                    .cornerRadius(8)
+                    .padding()
+            }
+        }
     }
 }
