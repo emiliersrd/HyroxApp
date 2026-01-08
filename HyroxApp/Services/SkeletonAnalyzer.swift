@@ -8,7 +8,7 @@ import CoreMedia
 public final class SkeletonAnalyzer {
     private var imageGenerator: AVAssetImageGenerator?
 
-    public init() {}
+    public nonisolated init() {}
 
     // Matches the call used in RenameLabelView: analyzer.analyzeAsset(url:) { obs in ... }
     public func analyzeAsset(url: URL,
