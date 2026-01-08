@@ -17,6 +17,8 @@ struct SkeletonTrackingView: View {
     @State private var currentTime: CMTime = .zero
     @State private var timeObserverToken: Any?
     @State private var showFullScreenLive = false
+    @State private var saveResultMessage: String?
+    @State private var showSaveAlert = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -49,30 +51,61 @@ struct SkeletonTrackingView: View {
                     )
             }
 
-            HStack(spacing: 20) {
+            HStack(spacing: 16) {
+                // Start camera
                 Button(action: startSession) {
-                    Text("Start camera")
+                    Image(systemName: "camera.fill")
+                        .font(.title2)
                 }
 
+                // Record / stop
                 if recorder.isRecording {
                     Button(action: recorder.stopRecording) {
-                        Text("Stop recording")
+                        Image(systemName: "stop.fill")
+                            .font(.title2)
                             .foregroundColor(.red)
                     }
                 } else {
                     Button(action: recorder.startRecording) {
-                        Text("Start recording")
-                            .foregroundColor(.green)
+                        Image(systemName: "record.circle.fill")
+                            .font(.title2)
+                            .foregroundColor(.red)
                     }
                 }
 
+                // If we have a recording, allow analyze/play/save
                 if let url = recorder.recordedURL {
                     Button(action: { analyze(url: url) }) {
-                        Text("Analyze last recording")
+                        ZStack {
+                            Image(systemName: "play.circle.fill")
+                                .font(.system(size: 26))
+                            Image(systemName: "wand.and.stars")
+                                .font(.system(size: 10))
+                                .offset(x: 12, y: -12)
+                        }
+                        .frame(width: 44, height: 44)
+                        .accessibilityLabel("Analyze and play")
                     }
 
                     Button(action: { play(url: url) }) {
-                        Text("Play last recording")
+                        Image(systemName: "play.fill")
+                            .font(.title2)
+                    }
+
+                    Button(action: {
+                        recorder.saveToPhotoLibrary { success, error in
+                            if success {
+                                saveResultMessage = "Saved to Photos"
+                            } else if let e = error {
+                                saveResultMessage = "Save failed: \(e.localizedDescription)"
+                            } else {
+                                saveResultMessage = "Save failed or permission denied"
+                            }
+                            showSaveAlert = true
+                        }
+                    }) {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.title2)
                     }
                 }
             }
@@ -100,6 +133,13 @@ struct SkeletonTrackingView: View {
             FullscreenLiveView(previewLayer: previewLayer, observations: timedObservations.map { (time: $0.0, observation: $0.1) }, videoSize: videoSize) {
                 showFullScreenLive = false
             }
+        }
+        // Present the analyzed recording in full screen with overlay
+        .fullScreenCover(isPresented: $showPlayer) {
+            FullscreenPlayerView(player: $player, currentTime: $currentTime, observations: timedObservations, videoSize: videoSize, isPresented: $showPlayer)
+        }
+        .alert(isPresented: $showSaveAlert) {
+            Alert(title: Text("Save recording"), message: Text(saveResultMessage ?? ""), dismissButton: .default(Text("OK")))
         }
     }
 
@@ -142,27 +182,30 @@ struct SkeletonTrackingView: View {
                 }
 
                 // Analyze using the faster asset analyzer (samples at sampleFPS)
-                // call the existing analyzer helper; it's main-actor isolated so call it on MainActor
+                // fastAnalyzeAssetUsingReader is main-actor isolated; call it on MainActor
                 await MainActor.run {
                     fastAnalyzeAssetUsingReader(url: url, sampleFPS: 15.0, targetSize: CGSize(width: 360, height: 360), maxConcurrentRequests: 2) { timed in
-                        // timed is [TimedObservation] (TimeObservation.observation is main-actor-isolated)
-                        Task { @MainActor in
+                        // timed is [TimedObservation]
+                        DispatchQueue.main.async {
                             let mapped: [(CMTime, VNHumanBodyPoseObservation)] = timed.map { ($0.time, $0.observation) }
                             self.timedObservations = mapped
-                            // ensure currentTime stays 0 until user plays
+                            // ensure currentTime stays 0 until user plays (we auto-play)
                             self.currentTime = .zero
+                            // Auto-play the analyzed recording for review
+                            self.play(url: url)
                         }
                     }
                 }
             } catch {
                 print("Failed to load asset properties: \(error)")
-                // fallback: try to run analysis without size; run analyzer anyway
+                // fallback: try to run analysis without size; run analyzer anyway (on MainActor)
                 await MainActor.run {
                     fastAnalyzeAssetUsingReader(url: url, sampleFPS: 15.0, targetSize: CGSize(width: 360, height: 360), maxConcurrentRequests: 2) { timed in
-                        Task { @MainActor in
+                        DispatchQueue.main.async {
                             let mapped: [(CMTime, VNHumanBodyPoseObservation)] = timed.map { ($0.time, $0.observation) }
                             self.timedObservations = mapped
                             self.currentTime = .zero
+                            self.play(url: url)
                         }
                     }
                 }
@@ -175,13 +218,75 @@ struct SkeletonTrackingView: View {
         removeTimeObserver()
 
         player = AVPlayer(url: url)
+        // present the video in fullscreen; the FullscreenPlayerView will add a time observer
         showPlayer = true
         player?.play()
+    }
+}
 
-        // add periodic time observer to sync overlay
-        let interval = CMTimeMake(value: 1, timescale: 30) // ~30fps update
-        timeObserverToken = player?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
-            self.currentTime = time
+// Fullscreen player view for analyzed recordings
+struct FullscreenPlayerView: View {
+    @Binding var player: AVPlayer?
+    @Binding var currentTime: CMTime
+    let observations: [(CMTime, VNHumanBodyPoseObservation)]
+    let videoSize: CGSize
+    @Binding var isPresented: Bool
+
+    @State private var timeObserverToken: Any?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            Color.black.ignoresSafeArea()
+
+            if let p = player {
+                VideoPlayer(player: p)
+                    .ignoresSafeArea()
+            }
+
+            SkeletonOverlayView(observations: observations.map { ($0.0, $0.1) }, currentTime: currentTime, videoSize: videoSize)
+                .allowsHitTesting(false)
+                .ignoresSafeArea()
+
+            // Close button
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        // cleanup observer then dismiss
+                        if let token = timeObserverToken, let p = player {
+                            p.removeTimeObserver(token)
+                            timeObserverToken = nil
+                        }
+                        player?.pause()
+                        player = nil
+                        isPresented = false
+                        dismiss()
+                    }) {
+                        Text("Fermer")
+                            .padding(10)
+                            .background(Color.black.opacity(0.6))
+                            .foregroundColor(.white)
+                            .cornerRadius(8)
+                    }
+                    .padding()
+                }
+                Spacer()
+            }
+        }
+        .onAppear {
+            if timeObserverToken == nil, let p = player {
+                let interval = CMTimeMake(value: 1, timescale: 30)
+                timeObserverToken = p.addPeriodicTimeObserver(forInterval: interval, queue: .main) { t in
+                    self.currentTime = t
+                }
+            }
+        }
+        .onDisappear {
+            if let token = timeObserverToken, let p = player {
+                p.removeTimeObserver(token)
+                timeObserverToken = nil
+            }
         }
     }
 }

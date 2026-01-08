@@ -28,8 +28,8 @@ struct CompareListView: View {
         "SkiErg": "https://youtu.be/EXAMPLE_SKIERG"
     ]
 
-    // Try to find a local MP4 in the app bundle for a given exercise title.
-    // We try a few filename variants to be forgiving about naming.
+    // Try to find a local video in the app bundle for a given exercise title.
+    // We try a few filename variants to be forgiving about naming and accept common video extensions.
     private func localCoachURL(for title: String) -> URL? {
         // candidate resource names (no extension)
         let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -37,32 +37,41 @@ struct CompareListView: View {
         let lower = underscored.lowercased()
         let candidates = [trimmed, underscored, lower, "\(trimmed)_coach", "\(underscored)_coach", "\(lower)_coach"]
 
-        // 1) Try the usual bundle lookup (resource at bundle root)
-        for name in candidates {
-            if let url = Bundle.main.url(forResource: name, withExtension: "mp4") {
-                return url
+        // extensions to check (in order)
+        let exts = ["mp4", "mov", "m4v"]
+
+        // 1) Try the usual bundle lookup (resource at bundle root) for each extension
+        for ext in exts {
+            for name in candidates {
+                if let url = Bundle.main.url(forResource: name, withExtension: ext) {
+                    return url
+                }
             }
         }
 
-        // 2) Fallback: scan mp4 resources in likely subdirectories (e.g. a folder named "Ressources")
-        let subdirsToCheck = ["Ressources", "Resources", nil].compactMap { $0 }
+        // 2) Fallback: scan resources in likely subdirectories (e.g. a folder named "Ressources")
+        let subdirsToCheck = ["Ressources", "Resources"]
         for sub in subdirsToCheck {
-            if let all = Bundle.main.urls(forResourcesWithExtension: "mp4", subdirectory: sub) {
-                for url in all {
-                    let base = url.deletingPathExtension().lastPathComponent
-                    if candidates.contains(base) {
-                        return url
+            for ext in exts {
+                if let all = Bundle.main.urls(forResourcesWithExtension: ext, subdirectory: sub) {
+                    for url in all {
+                        let base = url.deletingPathExtension().lastPathComponent
+                        if candidates.contains(base) {
+                            return url
+                        }
                     }
                 }
             }
         }
 
-        // 3) As a last resort scan all mp4s in the bundle root (covers folders added differently)
-        if let allRoot = Bundle.main.urls(forResourcesWithExtension: "mp4", subdirectory: nil) {
-            for url in allRoot {
-                let base = url.deletingPathExtension().lastPathComponent
-                if candidates.contains(base) {
-                    return url
+        // 3) As a last resort scan all known video extensions in the bundle root
+        for ext in exts {
+            if let allRoot = Bundle.main.urls(forResourcesWithExtension: ext, subdirectory: nil) {
+                for url in allRoot {
+                    let base = url.deletingPathExtension().lastPathComponent
+                    if candidates.contains(base) {
+                        return url
+                    }
                 }
             }
         }
@@ -92,6 +101,60 @@ struct CompareListView: View {
             }
         }
         .navigationTitle("Compare Exercises")
+        .toolbar {
+            // Debug button: list local .mp4s found in the bundle (useful to verify resources)
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    self.localFiles = findAllLocalVideos()
+                     showDebugSheet = true
+                 }) {
+                     Image(systemName: "magnifyingglass")
+                 }
+             }
+         }
+         .sheet(isPresented: $showDebugSheet) {
+             NavigationView {
+                 List(localFiles, id: \.self) { url in
+                     VStack(alignment: .leading) {
+                         Text(url.lastPathComponent)
+                             .font(.body)
+                         Text(url.path)
+                             .font(.caption)
+                             .foregroundColor(.secondary)
+                     }
+                     .padding(.vertical, 4)
+                 }
+                .navigationTitle("Local Videos")
+                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Fermer") { showDebugSheet = false } } }
+             }
+         }
+     }
+
+    // Debug state & helpers
+    @State private var showDebugSheet: Bool = false
+    @State private var localFiles: [URL] = []
+
+    /// Return all local video URLs with common extensions found in the bundle root and common subdirectories
+    private func findAllLocalVideos() -> [URL] {
+        let exts = ["mp4", "mov", "m4v"]
+        var results: [URL] = []
+        // check root for each extension
+        for ext in exts {
+            if let root = Bundle.main.urls(forResourcesWithExtension: ext, subdirectory: nil) {
+                results.append(contentsOf: root)
+            }
+        }
+        // check common subfolders
+        for sub in ["Ressources", "Resources"] {
+            for ext in exts {
+                if let urls = Bundle.main.urls(forResourcesWithExtension: ext, subdirectory: sub) {
+                    results.append(contentsOf: urls)
+                }
+            }
+        }
+        // dedupe and sort
+        let unique = Array(Set(results)).sorted { $0.lastPathComponent < $1.lastPathComponent }
+        return unique
     }
 }
 

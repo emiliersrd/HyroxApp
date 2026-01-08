@@ -30,6 +30,8 @@ struct CompareVideosView: View {
     @State private var isAnalyzing = false
     @State private var currentTime: CMTime = .zero
     @State private var timeObserverToken: Any?
+    // present fullscreen stacked compare players
+    @State private var showFullscreenCompare: Bool = false
 
     @State private var comparisonURL: URL?
     @State private var comparisonPlayer: AVPlayer?
@@ -168,6 +170,19 @@ struct CompareVideosView: View {
             VideoPicker(selectedURL: $rightURL)
         }
         .onDisappear { stopPlayback() }
+        // Present the fullscreen compare view (two videos stacked vertically)
+        .fullScreenCover(isPresented: $showFullscreenCompare, onDismiss: {
+            stopPlayback()
+        }) {
+            FullscreenCompareView(leftPlayer: $leftPlayer,
+                                  rightPlayer: $rightPlayer,
+                                  leftObservations: leftObservations,
+                                  rightObservations: rightObservations,
+                                  leftVideoSize: leftVideoSize,
+                                  rightVideoSize: rightVideoSize,
+                                  currentTime: $currentTime,
+                                  isPresented: $showFullscreenCompare)
+        }
     }
 
     private func playerView(player: AVPlayer?) -> some View {
@@ -311,6 +326,8 @@ struct CompareVideosView: View {
         DispatchQueue.main.async {
             lp.play()
             rp.play()
+            // present fullscreen stacked players after playback starts
+            self.showFullscreenCompare = true
         }
 
         let interval = CMTime(seconds: 1.0 / 30.0, preferredTimescale: 600)
@@ -633,3 +650,96 @@ struct VideoPicker: View {
     }
 }
 #endif
+
+// Fullscreen stack view: top and bottom video players with synchronized overlay
+struct FullscreenCompareView: View {
+    @Binding var leftPlayer: AVPlayer?
+    @Binding var rightPlayer: AVPlayer?
+    var leftObservations: [TimedObservation]
+    var rightObservations: [TimedObservation]
+    var leftVideoSize: CGSize
+    var rightVideoSize: CGSize
+    @Binding var currentTime: CMTime
+    @Binding var isPresented: Bool
+
+    @Environment(\.dismiss) private var dismiss
+    @State private var isPlaying: Bool = true
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+
+            GeometryReader { geo in
+                VStack(spacing: 0) {
+                    playerView(player: leftPlayer, observations: leftObservations, videoSize: leftVideoSize)
+                        .frame(width: geo.size.width, height: geo.size.height / 2)
+                    Divider().background(Color.white)
+                    playerView(player: rightPlayer, observations: rightObservations, videoSize: rightVideoSize)
+                        .frame(width: geo.size.width, height: geo.size.height / 2)
+                }
+            }
+
+            VStack {
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        isPlaying.toggle()
+                        if isPlaying {
+                            leftPlayer?.play()
+                            rightPlayer?.play()
+                        } else {
+                            leftPlayer?.pause()
+                            rightPlayer?.pause()
+                        }
+                    }) {
+                        Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                            .font(.system(size: 34))
+                            .foregroundColor(.white)
+                            .padding()
+                    }
+                }
+                Spacer()
+            }
+
+            VStack {
+                Spacer()
+                HStack {
+                    Button(action: {
+                        // cleanup and dismiss
+                        leftPlayer?.pause()
+                        rightPlayer?.pause()
+                        leftPlayer = nil
+                        rightPlayer = nil
+                        isPresented = false
+                        dismiss()
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 28))
+                            .foregroundColor(.white)
+                            .padding()
+                    }
+                    Spacer()
+                }
+            }
+        }
+        .onDisappear {
+            leftPlayer?.pause()
+            rightPlayer?.pause()
+        }
+    }
+
+    private func playerView(player: AVPlayer?, observations: [TimedObservation], videoSize: CGSize) -> some View {
+        ZStack {
+            if let p = player {
+                VideoPlayer(player: p)
+                    .ignoresSafeArea()
+                    .overlay(
+                        SkeletonOverlayView(observations: observations.map { (time: $0.time, observation: $0.observation) }, currentTime: currentTime, videoSize: videoSize)
+                            .allowsHitTesting(false)
+                    )
+            } else {
+                Color.black
+            }
+        }
+    }
+}

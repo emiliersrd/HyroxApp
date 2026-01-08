@@ -42,22 +42,6 @@ struct ExerciseDetailView: View {
                 Text(exercise.longDescription)
                     .font(.body)
 
-                // Compare with coach button: opens CompareVideosView preloaded with coach video
-                if let coachURL = exercise.videoURL {
-                    NavigationLink(destination: CompareVideosView(coachURL: coachURL)) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "person.fill")
-                            Text("Compare with coach")
-                                .fontWeight(.semibold)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding()
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(10)
-                    }
-                }
-
                 Spacer()
             }
             .padding()

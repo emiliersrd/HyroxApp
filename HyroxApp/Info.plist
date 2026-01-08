@@ -16,6 +16,8 @@
 	<string>Microphone is required to record audio while recording exercise videos.</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
 	<string>Save recordings to your photo library.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Access to the photo library is needed to let you choose videos and save recordings.</string>
 	<key>UISupportedInterfaceOrientations</key>
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>

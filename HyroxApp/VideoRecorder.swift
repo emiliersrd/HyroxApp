@@ -2,6 +2,7 @@ import Foundation
 import AVFoundation
 import SwiftUI
 import Combine
+import Photos
 
 /// Observable video recorder using AVCaptureSession and AVCaptureMovieFileOutput.
 final class VideoRecorder: NSObject, ObservableObject {
@@ -131,6 +132,25 @@ final class VideoRecorder: NSObject, ObservableObject {
     func stopRecording() {
         guard movieOutput.isRecording else { return }
         movieOutput.stopRecording()
+    }
+
+    /// Save the most recent recorded movie to the user's photo library.
+    func saveToPhotoLibrary(completion: @escaping (Bool, Error?) -> Void) {
+        guard let fileURL = recordedURL else { completion(false, nil); return }
+
+        PHPhotoLibrary.requestAuthorization { status in
+            guard status == .authorized || status == .limited else {
+                DispatchQueue.main.async { completion(false, nil) }
+                return
+            }
+
+            PHPhotoLibrary.shared().performChanges({
+                let request = PHAssetCreationRequest.forAsset()
+                request.addResource(with: .video, fileURL: fileURL, options: nil)
+            }, completionHandler: { success, error in
+                DispatchQueue.main.async { completion(success, error) }
+            })
+        }
     }
 }
 
